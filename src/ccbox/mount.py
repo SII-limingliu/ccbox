@@ -40,7 +40,8 @@ def add_mount(
     dev_name = device_name_from_path(resolved)
 
     lxd.add_disk_device(
-        entry.container, dev_name, resolved, resolved, readonly=readonly,
+        entry.container, dev_name, resolved, resolved,
+        readonly=readonly, shift=True,
     )
 
     entry.mounts = [m for m in entry.mounts if os.path.realpath(m.path) != resolved]
@@ -79,6 +80,40 @@ def ensure_uv_shim() -> None:
     shim_path.chmod(shim_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def fix_mount_parents(container: str, config: Config | None = None) -> None:
+    """Fix ownership of parent directories created by LXD for mount points.
+
+    LXD auto-creates missing parent dirs with d--------- root:root.
+    This makes them traversable by the container user.
+    """
+    if config is not None:
+        mounts = config.state.get_auto_mounts()
+    else:
+        from ccbox.config import _default_auto_mounts
+        mounts = _default_auto_mounts()
+
+    # Collect unique parent dirs that need fixing
+    parents: set[str] = set()
+    for m in mounts:
+        target = m.target if m.target is not None else m.path
+        parent = os.path.dirname(target)
+        while parent and parent != "/":
+            parents.add(parent)
+            parent = os.path.dirname(parent)
+
+    if not parents:
+        return
+
+    # Single exec: chown + chmod all parent dirs (ignore errors for already-correct ones)
+    dirs = " ".join(sorted(parents))
+    lxd.exec_cmd(
+        container,
+        ["sh", "-c", f"chown -f 1000:1000 {dirs}; chmod -f 755 {dirs}"],
+        check=False,
+    )
+
+
+
 def add_auto_mounts(container: str, config: Config | None = None) -> None:
     """Add auto-mounts to a container. Reads from config if provided."""
     if config is not None:
@@ -89,7 +124,9 @@ def add_auto_mounts(container: str, config: Config | None = None) -> None:
 
     for m in mounts:
         source = os.path.realpath(m.path)
-        target = m.target if m.target is not None else source
+        # Use original path as container target (not resolved) so symlinks
+        # like ~/.local/bin/claude appear at the right path inside container.
+        target = m.target if m.target is not None else m.path
 
         # Create source stubs if they don't exist
         if not os.path.exists(source):
@@ -98,5 +135,6 @@ def add_auto_mounts(container: str, config: Config | None = None) -> None:
 
         dev_name = device_name_from_path(target)
         lxd.add_disk_device(
-            container, dev_name, source, target, readonly=(m.mode == "ro"),
+            container, dev_name, source, target,
+            readonly=(m.mode == "ro"), shift=True,
         )

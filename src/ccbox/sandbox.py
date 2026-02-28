@@ -7,7 +7,7 @@ import sys
 
 from ccbox import lxd
 from ccbox.config import Config, SandboxEntry
-from ccbox.mount import add_auto_mounts, add_mount, ensure_uv_shim
+from ccbox.mount import add_auto_mounts, add_mount, ensure_uv_shim, fix_mount_parents
 from ccbox.session import list_sessions
 from ccbox.uv_server import ensure_server_running
 
@@ -68,6 +68,9 @@ def create_sandbox(
 
     # Now start
     lxd.start(cname)
+
+    # Fix parent directory permissions created by LXD for mount points
+    fix_mount_parents(cname, config)
 
     return cname
 

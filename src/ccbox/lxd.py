@@ -112,11 +112,14 @@ def add_disk_device(
     source: str,
     path: str,
     readonly: bool = False,
+    shift: bool = False,
 ) -> None:
     args = ["config", "device", "add", container, dev_name, "disk",
             f"source={source}", f"path={path}"]
     if readonly:
         args.append("readonly=true")
+    if shift:
+        args.append("shift=true")
     run_lxc(*args)
 
 
