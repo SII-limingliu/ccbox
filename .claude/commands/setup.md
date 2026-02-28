@@ -84,10 +84,19 @@ lxc stop ccbox-init-temp && lxc start ccbox-init-temp
 lxc exec ccbox-init-temp -- su -l <username> -c "claude --version"
 ```
 
-### 11. User's turn
-Tell the user: **"The container is ready. Run `lxc exec ccbox-init-temp -- su -l <username>` to drop into a shell and make any manual changes. Tell me when you're done and I'll publish the image."**
+### 11. Interactive loop
 
-Wait for the user to confirm.
+Present the user with these options:
+
+**"The container is ready. What would you like to do?"**
+1. **Install/configure something** — tell me what to do and I'll run it via `lxc exec`
+2. **Shell** — drop into the container yourself: `lxc exec ccbox-init-temp -- su -l <username>`
+3. **Done** — publish the image
+
+Repeat this loop:
+- If the user asks you to install or configure something, run the commands via `lxc exec ccbox-init-temp -- ...` and then ask again.
+- If the user wants a shell, tell them to run `lxc exec ccbox-init-temp -- su -l <username>` in another terminal, and wait for them to say they're done. Then ask again.
+- Only proceed to step 12 when the user says they're done / ok / publish.
 
 ### 12. Publish
 ```
