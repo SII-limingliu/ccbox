@@ -31,13 +31,15 @@ This replaces the old approach of proxying entire uv commands to the host.
 
 - LXD (with your user in the `lxd` group)
 - ZFS storage pool (default: `home-zfs`)
-- A base image published as `ccbox-base` (run `/setup` inside a sandbox to create one)
+- UV (for Python package management)
+- A base image published as `ccbox-base` (run `claude /setup` inside a sandbox to create one)
 - Python 3.12+
 
 ## Install
 
 ```bash
-pip install -e .
+uv pip install -e .
+claude /setup # creates the base image
 ```
 
 ## Project structure
