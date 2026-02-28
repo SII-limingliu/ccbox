@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import sys
 
+import importlib.resources
+
 from ccbox import lxd
 from ccbox.config import Config, SandboxEntry
 from ccbox.mount import add_auto_mounts, add_mount, ensure_uv_shim, fix_mount_parents
@@ -14,6 +16,23 @@ from ccbox.uv_server import ensure_server_running
 CONTAINER_PREFIX = "ccbox-"
 BASE_IMAGE = "ccbox-base"
 IDMAP_VALUE = "both 1000 1000"
+
+
+def _push_known_hosts(cname: str) -> None:
+    """Push bundled SSH known_hosts into the container."""
+    import tempfile
+    from pathlib import Path
+    home = str(Path.home())
+    asset_ref = importlib.resources.files("ccbox").parent.parent / "assets" / "ssh_known_hosts"
+    content = asset_ref.read_text()
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".known_hosts", delete=False) as f:
+        f.write(content)
+        tmp = f.name
+    try:
+        lxd.exec_cmd(cname, ["mkdir", "-p", f"{home}/.ssh"], user="1000", check=False)
+        lxd.push_file(cname, tmp, f"{home}/.ssh/known_hosts", uid=1000, gid=1000, mode="0644")
+    finally:
+        os.unlink(tmp)
 
 
 def container_name(sandbox_name: str) -> str:
@@ -68,6 +87,9 @@ def create_sandbox(
 
     # Now start
     lxd.start(cname)
+
+    # Push SSH known_hosts so git-over-SSH doesn't block on host key verification
+    _push_known_hosts(cname)
 
     # Fix parent directory permissions created by LXD for mount points
     fix_mount_parents(cname, config)

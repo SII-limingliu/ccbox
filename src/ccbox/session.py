@@ -78,6 +78,10 @@ def create_session(
     if env is None:
         env = {}
 
+    # Ensure HOME is set — lxc exec with --env flags may not inherit it
+    from pathlib import Path
+    env.setdefault("HOME", str(Path.home()))
+
     # Always set UV_HARDLINK_SOCKET so patched uv defers hardlinks to host
     from ccbox.config import UV_SOCK
     env.setdefault("UV_HARDLINK_SOCKET", str(UV_SOCK))
