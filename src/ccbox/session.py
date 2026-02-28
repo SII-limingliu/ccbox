@@ -75,6 +75,13 @@ def create_session(
     if session_name is None:
         session_name = next_session_name(container)
 
+    if env is None:
+        env = {}
+
+    # Always set UV_HARDLINK_SOCKET so patched uv defers hardlinks to host
+    from ccbox.config import UV_SOCK
+    env.setdefault("UV_HARDLINK_SOCKET", str(UV_SOCK))
+
     # Build tmux new-session command
     tmux_args = ["tmux", "-f", TMUX_CONF, "new-session", "-d", "-s", session_name]
     if cwd:

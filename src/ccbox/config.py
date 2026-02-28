@@ -55,10 +55,15 @@ UV_SOCK = RUN_DIR / "uv.sock"
 def _default_auto_mounts() -> list[MountEntry]:
     home = str(Path.home())
     return [
+        # Claude tooling
         MountEntry(path=f"{home}/.claude", mode="rw"),
         MountEntry(path=f"{home}/.local/bin/claude", mode="ro"),
         MountEntry(path=f"{home}/.local/share/claude", mode="ro"),
+        MountEntry(path=f"{home}/.local/share/claude/versions", mode="rw"),
+        # uv: cache, managed pythons, config
         MountEntry(path=f"{home}/.cache/uv", mode="rw"),
+        MountEntry(path=f"{home}/.local/share/uv", mode="rw"),
+        MountEntry(path=f"{home}/.config/uv", mode="ro"),
         # uv shim → ~/.local/bin/uv inside the container
         MountEntry(path=str(SHIM_DIR / "uv"), mode="ro",
                    target=f"{home}/.local/bin/uv"),
