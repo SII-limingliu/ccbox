@@ -151,6 +151,39 @@ def build_claude_command(extra_args: list[str] | None = None) -> str:
     return shlex.join(parts)
 
 
+def _find_nvm_codex() -> str | None:
+    """Find the codex binary under ~/.nvm."""
+    import glob
+    matches = glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/codex"))
+    return matches[0] if matches else None
+
+
+def build_codex_command(extra_args: list[str] | None = None) -> str:
+    """Build the codex invocation command string with --yolo.
+
+    Uses the full path to the nvm-installed codex and prepends its
+    bin dir to PATH so the matching node version is found.
+    """
+    codex_path = _find_nvm_codex()
+    if codex_path:
+        nvm_bin = os.path.dirname(codex_path)
+        parts = [codex_path, "--yolo"]
+    else:
+        nvm_bin = None
+        parts = ["codex", "--yolo"]
+    if extra_args:
+        for arg in extra_args:
+            if arg in ("--yolo", "--dangerously-bypass-approvals-and-sandbox"):
+                continue
+            parts.append(arg)
+    cmd = shlex.join(parts)
+    if nvm_bin:
+        # Use env(1) to prepend nvm bin to PATH — inline VAR=val
+        # doesn't work with bash's exec builtin.
+        cmd = f"env PATH={shlex.quote(nvm_bin)}:$PATH {cmd}"
+    return cmd
+
+
 def get_forwarded_env(whitelist: list[str]) -> dict[str, str]:
     """Read host env vars that should be forwarded into the container."""
     result = {}

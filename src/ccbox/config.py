@@ -70,6 +70,9 @@ def _default_auto_mounts() -> list[MountEntry]:
                    target=f"{home}/.local/bin/uv"),
         # Socket directory for host↔container uv channel
         MountEntry(path=str(RUN_DIR), mode="rw"),
+        # Codex CLI (via nvm)
+        MountEntry(path=f"{home}/.nvm", mode="ro"),
+        MountEntry(path=f"{home}/.codex", mode="rw"),
     ]
 
 

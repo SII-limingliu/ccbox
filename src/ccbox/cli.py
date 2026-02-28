@@ -22,6 +22,7 @@ from ccbox.sandbox import (
 from ccbox.session import (
     attach_session,
     build_claude_command,
+    build_codex_command,
     create_session,
     detached_sessions,
     get_forwarded_env,
@@ -133,6 +134,29 @@ def cmd_claude(config: Config, args: argparse.Namespace) -> None:
     env = get_forwarded_env(config.state.env_whitelist)
 
     cmd = build_claude_command(args.claude_args)
+    name = create_session(container, cmd, cwd=cwd, env=env)
+    attach_session(container, name)
+
+
+def cmd_codex(config: Config, args: argparse.Namespace) -> None:
+    """Always create a new session running codex --yolo with given args."""
+    cwd = os.getcwd()
+    sandbox_name = config.sandbox_for_path(cwd)
+
+    if sandbox_name is None:
+        sandbox_name = auto_sandbox_name_from_cwd()
+        if config.get_sandbox(sandbox_name) is not None:
+            n = 1
+            while config.get_sandbox(f"{sandbox_name}-{n}") is not None:
+                n += 1
+            sandbox_name = f"{sandbox_name}-{n}"
+        print(f"Creating sandbox '{sandbox_name}' for {cwd}...")
+        create_sandbox(config, sandbox_name, mounts=[(cwd, False)])
+
+    container = ensure_running(config, sandbox_name)
+    env = get_forwarded_env(config.state.env_whitelist)
+
+    cmd = build_codex_command(args.codex_args)
     name = create_session(container, cmd, cwd=cwd, env=env)
     attach_session(container, name)
 
@@ -333,6 +357,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_claude = sub.add_parser("claude", help="New session running claude with given args")
     p_claude.add_argument("claude_args", nargs=argparse.REMAINDER, help="Arguments to pass to claude")
 
+    # ccbox codex [-- args...]
+    p_codex = sub.add_parser("codex", help="New session running codex --yolo with given args")
+    p_codex.add_argument("codex_args", nargs=argparse.REMAINDER, help="Arguments to pass to codex")
+
     # ccbox ls
     sub.add_parser("ls", help="List sandboxes")
 
@@ -419,6 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
 COMMAND_MAP = {
     None: cmd_default,
     "claude": cmd_claude,
+    "codex": cmd_codex,
     "ls": cmd_ls,
     "create": cmd_create,
     "mount": cmd_mount,
