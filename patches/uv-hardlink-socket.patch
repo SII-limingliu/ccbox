@@ -1,0 +1,107 @@
+diff --git a/crates/uv-fs/src/link.rs b/crates/uv-fs/src/link.rs
+index 8b73c3b..58df32c 100644
+--- a/crates/uv-fs/src/link.rs
++++ b/crates/uv-fs/src/link.rs
+@@ -2,8 +2,10 @@
+ //! copying) when link methods are unsupported.
+ 
+ use std::io;
++use std::io::{BufRead, Write};
++use std::os::unix::net::UnixStream;
+ use std::path::{Path, PathBuf};
+-use std::sync::{Arc, Mutex};
++use std::sync::{Arc, Mutex, OnceLock};
+ 
+ use rustc_hash::FxHashMap;
+ use tracing::debug;
+@@ -765,9 +767,80 @@ where
+         })
+ }
+ 
++/// Return the `UV_HARDLINK_SOCKET` path if set, cached for the process lifetime.
++fn hardlink_socket_path() -> Option<&'static str> {
++    static SOCKET: OnceLock<Option<String>> = OnceLock::new();
++    SOCKET
++        .get_or_init(|| std::env::var("UV_HARDLINK_SOCKET").ok().filter(|s| !s.is_empty()))
++        .as_deref()
++}
++
++/// Escape a string for embedding in a JSON value (handles `\` and `"`).
++fn json_escape(s: &str) -> String {
++    let mut out = String::with_capacity(s.len() + 2);
++    out.push('"');
++    for c in s.chars() {
++        match c {
++            '\\' => out.push_str("\\\\"),
++            '"' => out.push_str("\\\""),
++            '\n' => out.push_str("\\n"),
++            '\r' => out.push_str("\\r"),
++            '\t' => out.push_str("\\t"),
++            c => out.push(c),
++        }
++    }
++    out.push('"');
++    out
++}
++
++/// Request a hardlink via the host-side ccbox server over a Unix socket.
++///
++/// Protocol: send `{"src":"...","dst":"..."}\n`, receive `{"ok":true}\n` or
++/// `{"ok":false,"error":"..."}\n`.
++fn remote_hardlink(src: &Path, dst: &Path, socket_path: &str) -> io::Result<()> {
++    let mut stream = UnixStream::connect(socket_path)?;
++    stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
++
++    let request = format!(
++        "{{\"src\":{},\"dst\":{}}}\n",
++        json_escape(&src.to_string_lossy()),
++        json_escape(&dst.to_string_lossy()),
++    );
++    stream.write_all(request.as_bytes())?;
++
++    let mut reader = io::BufReader::new(&stream);
++    let mut response = String::new();
++    reader.read_line(&mut response)?;
++
++    // Parse minimal JSON response
++    if response.contains("\"ok\":true") || response.contains("\"ok\": true") {
++        Ok(())
++    } else if let Some(start) = response.find("\"error\":") {
++        let msg = response[start + 8..]
++            .trim()
++            .trim_start_matches('"')
++            .split('"')
++            .next()
++            .unwrap_or("unknown error");
++        Err(io::Error::new(io::ErrorKind::Other, msg.to_string()))
++    } else {
++        Err(io::Error::new(
++            io::ErrorKind::Other,
++            format!("unexpected response from hardlink server: {response}"),
++        ))
++    }
++}
++
+ /// Try to create a hard link, returning the `io::Error` on failure.
++///
++/// If `UV_HARDLINK_SOCKET` is set, defers the hardlink to the host-side
++/// ccbox server (for use inside containers where cross-mount hardlinks fail).
+ fn try_hardlink_file(src: &Path, dst: &Path) -> io::Result<()> {
+-    fs_err::hard_link(src, dst)
++    if let Some(socket_path) = hardlink_socket_path() {
++        remote_hardlink(src, dst, socket_path)
++    } else {
++        fs_err::hard_link(src, dst)
++    }
+ }
+ 
+ /// Atomically overwrite an existing file with a hard link.
+@@ -786,7 +859,7 @@ where
+     let tempdir = tempfile::tempdir_in(parent)?;
+     let tempfile = tempdir.path().join(dst.file_name().unwrap());
+ 
+-    if fs_err::hard_link(src, &tempfile).is_ok() {
++    if try_hardlink_file(src, &tempfile).is_ok() {
+         fs_err::rename(&tempfile, dst)?;
+         Ok(state.mode_working())
+     } else {
