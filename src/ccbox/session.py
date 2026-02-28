@@ -1,0 +1,142 @@
+"""Tmux session lifecycle inside LXD containers."""
+
+from __future__ import annotations
+
+import os
+import shlex
+
+from ccbox import lxd
+
+CONTAINER_USER = "1000"  # UID for the mapped user
+TMUX_CONF = "/etc/tmux.conf"
+
+
+def list_sessions(container: str) -> list[dict]:
+    """List tmux sessions inside the container.
+
+    Returns list of dicts with keys: name, attached, created.
+    """
+    r = lxd.exec_cmd(
+        container,
+        ["tmux", "list-sessions", "-F", "#{session_name}|#{session_attached}|#{session_created}"],
+        user=CONTAINER_USER,
+        capture=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        return []
+    sessions = []
+    for line in r.stdout.strip().splitlines():
+        parts = line.split("|", 2)
+        if len(parts) == 3:
+            sessions.append({
+                "name": parts[0],
+                "attached": int(parts[1]) > 0,
+                "created": parts[2],
+            })
+    return sessions
+
+
+def detached_sessions(container: str) -> list[dict]:
+    """Return only detached (unattached) sessions."""
+    return [s for s in list_sessions(container) if not s["attached"]]
+
+
+def next_session_name(container: str) -> str:
+    """Generate the next sequential session name (s-0, s-1, ...)."""
+    existing = list_sessions(container)
+    used = set()
+    for s in existing:
+        name = s["name"]
+        if name.startswith("s-"):
+            try:
+                used.add(int(name[2:]))
+            except ValueError:
+                pass
+    n = 0
+    while n in used:
+        n += 1
+    return f"s-{n}"
+
+
+def create_session(
+    container: str,
+    command: str,
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    session_name: str | None = None,
+) -> str:
+    """Create a new tmux session inside the container.
+
+    Uses tmux new-session -d, then send-keys so bash is the session
+    process (survives command exit).
+    """
+    if session_name is None:
+        session_name = next_session_name(container)
+
+    # Build tmux new-session command
+    tmux_args = ["tmux", "-f", TMUX_CONF, "new-session", "-d", "-s", session_name]
+    if cwd:
+        tmux_args += ["-c", cwd]
+
+    lxd.exec_cmd(container, tmux_args, user=CONTAINER_USER, env=env)
+
+    # Send the command via send-keys so bash is the parent process
+    lxd.exec_cmd(
+        container,
+        ["tmux", "send-keys", "-t", session_name, command, "Enter"],
+        user=CONTAINER_USER,
+    )
+
+    return session_name
+
+
+def attach_session(container: str, session_name: str) -> None:
+    """Attach to an existing tmux session (interactive, inherited stdio)."""
+    lxd.exec_interactive(
+        container,
+        ["tmux", "-f", TMUX_CONF, "attach-session", "-t", session_name],
+        user=CONTAINER_USER,
+    )
+    print(f"Detached from session '{session_name}'.")
+
+
+def kill_session(container: str, name: str) -> None:
+    lxd.exec_cmd(
+        container,
+        ["tmux", "kill-session", "-t", name],
+        user=CONTAINER_USER,
+        check=False,
+    )
+
+
+def kill_all_sessions(container: str) -> None:
+    lxd.exec_cmd(
+        container,
+        ["tmux", "kill-server"],
+        user=CONTAINER_USER,
+        check=False,
+    )
+
+
+def build_claude_command(extra_args: list[str] | None = None) -> str:
+    """Build the claude invocation command string."""
+    parts = ["claude", "--allow-dangerously-skip-permissions"]
+    if extra_args:
+        # Deduplicate the flag if user passed it
+        for arg in extra_args:
+            if arg == "--allow-dangerously-skip-permissions":
+                continue
+            parts.append(arg)
+    return shlex.join(parts)
+
+
+def get_forwarded_env(whitelist: list[str]) -> dict[str, str]:
+    """Read host env vars that should be forwarded into the container."""
+    result = {}
+    for var in whitelist:
+        val = os.environ.get(var)
+        if val is not None:
+            result[var] = val
+    return result
