@@ -71,13 +71,17 @@ At minimum, install: `tmux git curl build-essential python3 python3-venv sudo lo
 Also run: `lxc exec ccbox-init-temp -- locale-gen en_US.UTF-8`
 
 ### 10. Mount claude + test
-Add host mounts so claude binary is available:
+Read auto-mounts from `~/.config/ccbox/state.json` field `"auto_mounts"`. If not set, use defaults:
+- `~/.claude` (rw)
+- `~/.local/bin` (ro)
+- `~/.local/share/claude` (ro)
+- `~/.cache/uv` (ro)
+
+The user may have added custom auto-mounts (e.g. `~/.vim`, `~/.oh-my-zsh`) via `ccbox config mounts add`. Read the config and add ALL of them:
 ```
-lxc config device add ccbox-init-temp mount-claude-bin disk source=$HOME/.local/bin path=$HOME/.local/bin readonly=true
-lxc config device add ccbox-init-temp mount-claude-share disk source=$HOME/.local/share/claude path=$HOME/.local/share/claude readonly=true
-lxc config device add ccbox-init-temp mount-claude-config disk source=$HOME/.claude path=$HOME/.claude readonly=true
-lxc config device add ccbox-init-temp mount-uv-cache disk source=$HOME/.cache/uv path=$HOME/.cache/uv readonly=true
+lxc config device add ccbox-init-temp <device-name> disk source=<path> path=<path> [readonly=true]
 ```
+Device name: sanitize the path — replace `/` with `-`, prefix with `mount-`.
 Restart and test:
 ```
 lxc stop ccbox-init-temp && lxc start ccbox-init-temp

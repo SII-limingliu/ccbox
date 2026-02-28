@@ -49,8 +49,8 @@ def create_sandbox(
     # Set UID mapping
     lxd.set_config(cname, "raw.idmap", IDMAP_VALUE)
 
-    # Add auto-mounts (claude tooling)
-    add_auto_mounts(cname)
+    # Add auto-mounts (claude tooling + user-configured)
+    add_auto_mounts(cname, config)
 
     # Register in config before user mounts (so add_mount can find it)
     entry = SandboxEntry(container=cname)

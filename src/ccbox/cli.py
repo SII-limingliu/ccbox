@@ -272,6 +272,29 @@ def cmd_config(config: Config, args: argparse.Namespace) -> None:
                 print(f"Storage pool: {pool}")
             else:
                 print("No storage pool configured (using LXD default).")
+    elif args.config_type == "mounts":
+        if args.mounts_action == "add":
+            mode = "ro" if args.ro else "rw"
+            config.add_auto_mount(args.path, mode)
+            resolved = os.path.realpath(args.path)
+            print(f"Added auto-mount: {resolved} ({mode})")
+        elif args.mounts_action == "remove":
+            if config.remove_auto_mount(args.path):
+                print(f"Removed auto-mount: {os.path.realpath(args.path)}")
+            else:
+                print(f"Not found in auto-mounts: {os.path.realpath(args.path)}", file=sys.stderr)
+                raise SystemExit(1)
+        elif args.mounts_action == "list":
+            mounts = config.state.get_auto_mounts()
+            if not mounts:
+                print("No auto-mounts configured.")
+            else:
+                for m in mounts:
+                    print(f"  {m.path} ({m.mode})")
+        elif args.mounts_action == "reset":
+            config._state.auto_mounts = None
+            config.save()
+            print("Auto-mounts reset to defaults.")
 
 
 def cmd_init(config: Config, args: argparse.Namespace) -> None:
@@ -358,6 +381,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_pool = config_sub.add_parser("pool", help="Get/set LXD storage pool")
     p_pool.add_argument("pool_name", nargs="?", default=None, help="Pool name (omit to show current)")
 
+    # ccbox config mounts add/remove/list/reset
+    p_mounts = config_sub.add_parser("mounts", help="Manage auto-mounts (applied to every new sandbox)")
+    mounts_sub = p_mounts.add_subparsers(dest="mounts_action")
+    p_mounts_add = mounts_sub.add_parser("add", help="Add auto-mount")
+    p_mounts_add.add_argument("path", help="Host path (file or directory)")
+    p_mounts_add.add_argument("--ro", action="store_true", help="Read-only (default: rw)")
+    p_mounts_rm = mounts_sub.add_parser("remove", help="Remove auto-mount")
+    p_mounts_rm.add_argument("path", help="Path to remove")
+    mounts_sub.add_parser("list", help="List auto-mounts")
+    mounts_sub.add_parser("reset", help="Reset to defaults")
+
     # ccbox init [--force] [--storage POOL]
     p_init = sub.add_parser("init", help="Create base image")
     p_init.add_argument("--force", action="store_true", help="Rebuild existing base image")
@@ -406,6 +440,10 @@ def main() -> None:
         if args.config_type == "env":
             if not hasattr(args, "env_action") or args.env_action is None:
                 parser.parse_args(["config", "env", "--help"])
+                raise SystemExit(1)
+        if args.config_type == "mounts":
+            if not hasattr(args, "mounts_action") or args.mounts_action is None:
+                parser.parse_args(["config", "mounts", "--help"])
                 raise SystemExit(1)
 
     try:

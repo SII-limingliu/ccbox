@@ -4,18 +4,9 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
 
 from ccbox import lxd
 from ccbox.config import Config, MountEntry
-
-# Directories auto-mounted into every sandbox
-AUTO_MOUNTS = [
-    (Path.home() / ".claude", "rw"),
-    (Path.home() / ".local" / "bin", "ro"),
-    (Path.home() / ".local" / "share" / "claude", "ro"),
-    (Path.home() / ".cache" / "uv", "ro"),
-]
 
 
 def device_name_from_path(path: str) -> str:
@@ -26,6 +17,12 @@ def device_name_from_path(path: str) -> str:
     clean = path.strip("/")
     clean = re.sub(r"[^a-zA-Z0-9_.-]", "-", clean)
     return f"mount-{clean}"
+
+
+def _ensure_path_exists(path: str) -> None:
+    """Create directory if it doesn't exist. Skip for files."""
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
 
 
 def add_mount(
@@ -40,8 +37,8 @@ def add_mount(
         raise ValueError(f"Sandbox '{sandbox_name}' not found")
 
     resolved = os.path.realpath(path)
-    if not os.path.isdir(resolved):
-        raise ValueError(f"Path is not a directory: {resolved}")
+    if not os.path.exists(resolved):
+        raise ValueError(f"Path does not exist: {resolved}")
 
     mode = "ro" if readonly else "rw"
     dev_name = device_name_from_path(resolved)
@@ -73,13 +70,20 @@ def remove_mount(config: Config, sandbox_name: str, path: str) -> None:
     config.set_sandbox(sandbox_name, entry)
 
 
-def add_auto_mounts(container: str) -> None:
-    """Add standard auto-mounts for claude tooling."""
-    for mount_path, mode in AUTO_MOUNTS:
-        resolved = str(mount_path)
-        if not os.path.isdir(resolved):
+def add_auto_mounts(container: str, config: Config | None = None) -> None:
+    """Add auto-mounts to a container. Reads from config if provided."""
+    if config is not None:
+        mounts = config.state.get_auto_mounts()
+    else:
+        from ccbox.config import _default_auto_mounts
+        mounts = _default_auto_mounts()
+
+    for m in mounts:
+        resolved = os.path.realpath(m.path)
+        # Create directory stubs for dirs that don't exist yet
+        if not os.path.exists(resolved):
             os.makedirs(resolved, exist_ok=True)
         dev_name = device_name_from_path(resolved)
         lxd.add_disk_device(
-            container, dev_name, resolved, resolved, readonly=(mode == "ro"),
+            container, dev_name, resolved, resolved, readonly=(m.mode == "ro"),
         )

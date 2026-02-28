@@ -43,11 +43,27 @@ class SandboxEntry:
         )
 
 
+def _default_auto_mounts() -> list[MountEntry]:
+    home = str(Path.home())
+    return [
+        MountEntry(path=f"{home}/.claude", mode="rw"),
+        MountEntry(path=f"{home}/.local/bin", mode="ro"),
+        MountEntry(path=f"{home}/.local/share/claude", mode="ro"),
+        MountEntry(path=f"{home}/.cache/uv", mode="ro"),
+    ]
+
+
 @dataclass
 class State:
     sandboxes: dict[str, SandboxEntry] = field(default_factory=dict)
     env_whitelist: list[str] = field(default_factory=list)
     storage_pool: str | None = None
+    auto_mounts: list[MountEntry] | None = None  # None = use defaults
+
+    def get_auto_mounts(self) -> list[MountEntry]:
+        if self.auto_mounts is None:
+            return _default_auto_mounts()
+        return self.auto_mounts
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -56,14 +72,20 @@ class State:
         }
         if self.storage_pool is not None:
             d["storage_pool"] = self.storage_pool
+        if self.auto_mounts is not None:
+            d["auto_mounts"] = [m.to_dict() for m in self.auto_mounts]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> State:
+        auto_mounts = None
+        if "auto_mounts" in d:
+            auto_mounts = [MountEntry.from_dict(m) for m in d["auto_mounts"]]
         return cls(
             sandboxes={k: SandboxEntry.from_dict(v) for k, v in d.get("sandboxes", {}).items()},
             env_whitelist=d.get("env_whitelist", []),
             storage_pool=d.get("storage_pool"),
+            auto_mounts=auto_mounts,
         )
 
 
@@ -128,3 +150,32 @@ class Config:
     def set_storage_pool(self, pool: str | None) -> None:
         self._state.storage_pool = pool
         self.save()
+
+    def _ensure_auto_mounts_materialized(self) -> None:
+        """Copy defaults into state so they can be edited."""
+        if self._state.auto_mounts is None:
+            self._state.auto_mounts = _default_auto_mounts()
+
+    def add_auto_mount(self, path: str, mode: str) -> None:
+        self._ensure_auto_mounts_materialized()
+        resolved = os.path.realpath(path)
+        # Replace if same path exists
+        self._state.auto_mounts = [
+            m for m in self._state.auto_mounts
+            if os.path.realpath(m.path) != resolved
+        ]
+        self._state.auto_mounts.append(MountEntry(path=resolved, mode=mode))
+        self.save()
+
+    def remove_auto_mount(self, path: str) -> bool:
+        self._ensure_auto_mounts_materialized()
+        resolved = os.path.realpath(path)
+        before = len(self._state.auto_mounts)
+        self._state.auto_mounts = [
+            m for m in self._state.auto_mounts
+            if os.path.realpath(m.path) != resolved
+        ]
+        if len(self._state.auto_mounts) == before:
+            return False
+        self.save()
+        return True
