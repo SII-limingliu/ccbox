@@ -1,12 +1,13 @@
 # ccbox
 
-Sandboxed Claude Code sessions in LXD containers. Run `claude --dangerously-skip-permissions` safely by isolating it inside a container with identity-mapped mounts.
+Sandboxed Claude Code and Codex CLI sessions in LXD containers. Run `claude --dangerously-skip-permissions` or `codex --yolo` safely by isolating them inside a container with identity-mapped mounts.
 
 ## How it works
 
 ```
 ccbox              # auto-create sandbox for CWD, launch Claude Code in tmux
 ccbox claude       # same, explicit
+ccbox codex        # launch Codex CLI with --yolo in tmux
 Ctrl+Q             # detach from session (reattach on next ccbox run)
 ```
 
@@ -76,6 +77,8 @@ These host paths are bind-mounted into every sandbox:
 | `~/.config/uv` | ro | uv settings |
 | `~/.config/ccbox/bin/uv` → `~/.local/bin/uv` | ro | Patched uv binary |
 | `~/.config/ccbox/run` | rw | Unix socket for hardlink server |
+| `~/.nvm` | ro | Node.js runtime and Codex CLI binary |
+| `~/.codex` | rw | Codex auth, config, state, and sessions |
 
 ## Building the patched uv
 
@@ -104,6 +107,7 @@ ccbox config mount remove ~/.ssh
 ```bash
 ccbox                    # auto-sandbox for CWD + Claude Code session
 ccbox claude [args]      # explicit Claude Code with extra args
+ccbox codex [-- args]    # Codex CLI with --yolo (extra args passed through)
 ccbox list               # list sandboxes
 ccbox status [name]      # show sandbox status
 ccbox stop [name]        # stop sandbox container
