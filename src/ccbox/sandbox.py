@@ -9,7 +9,7 @@ import importlib.resources
 
 from ccbox import lxd
 from ccbox.config import Config, SandboxEntry
-from ccbox.mount import add_auto_mounts, add_mount, ensure_uv_shim, ensure_profile_script, fix_mount_parents
+from ccbox.mount import add_auto_mounts, add_mount, ensure_uv_shim, ensure_profile_script, fix_mount_parents, prune_stale_mounts
 from ccbox.session import list_sessions
 from ccbox.uv_server import ensure_server_running
 
@@ -103,6 +103,9 @@ def ensure_running(config: Config, name: str) -> str:
     entry = config.get_sandbox(name)
     if entry is None:
         raise ValueError(f"Sandbox '{name}' not found")
+
+    # Prune mounts whose host path vanished or was replaced (inode changed)
+    prune_stale_mounts(config, name)
 
     state = lxd.container_state(entry.container)
     if state == "NotFound":

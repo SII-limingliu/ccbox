@@ -22,6 +22,60 @@ def device_name_from_path(path: str) -> str:
     return f"mount-{clean}"
 
 
+def _inode_key(path: str) -> str | None:
+    """Return 'dev:ino' for a path, or None if it doesn't exist."""
+    try:
+        st = os.stat(path)
+        return f"{st.st_dev}:{st.st_ino}"
+    except OSError:
+        return None
+
+
+def prune_stale_mounts(config: Config, sandbox_name: str) -> list[str]:
+    """Remove mounts whose host paths no longer exist or whose inode changed.
+
+    A changed inode means the original directory was moved/deleted and a new
+    one appeared at the same path — the LXD bind mount still follows the old
+    inode, so the device must be removed.
+
+    Returns list of pruned paths (for caller to report).
+    """
+    entry = config.get_sandbox(sandbox_name)
+    if entry is None:
+        return []
+
+    pruned: list[str] = []
+    keep: list[MountEntry] = []
+    for m in entry.mounts:
+        reason = None
+        if not os.path.exists(m.path):
+            reason = "no longer exists on host"
+        elif m.inode is not None and _inode_key(m.path) != m.inode:
+            reason = "replaced by a different directory"
+
+        if reason:
+            dev_name = device_name_from_path(m.path)
+            try:
+                lxd.remove_disk_device(entry.container, dev_name)
+            except Exception:
+                pass  # device may already be gone
+            mode_flag = " --ro" if m.mode == "ro" else ""
+            pruned.append(m.path)
+            print(f"Removing stale mount: {m.path} ({reason})",
+                  file=sys.stderr)
+            if os.path.exists(m.path):
+                print(f"  Re-add: ccbox mount {sandbox_name} {m.path}{mode_flag}",
+                      file=sys.stderr)
+        else:
+            keep.append(m)
+
+    if pruned:
+        entry.mounts = keep
+        config.set_sandbox(sandbox_name, entry)
+
+    return pruned
+
+
 def add_mount(
     config: Config,
     sandbox_name: str,
@@ -40,13 +94,16 @@ def add_mount(
     mode = "ro" if readonly else "rw"
     dev_name = device_name_from_path(resolved)
 
+    # Clean up stale mounts before adding (host paths that no longer exist)
+    prune_stale_mounts(config, sandbox_name)
+
     lxd.add_disk_device(
         entry.container, dev_name, resolved, resolved,
         readonly=readonly, shift=True,
     )
 
     entry.mounts = [m for m in entry.mounts if os.path.realpath(m.path) != resolved]
-    entry.mounts.append(MountEntry(path=resolved, mode=mode))
+    entry.mounts.append(MountEntry(path=resolved, mode=mode, inode=_inode_key(resolved)))
     config.set_sandbox(sandbox_name, entry)
 
 

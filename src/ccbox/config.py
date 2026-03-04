@@ -17,6 +17,7 @@ class MountEntry:
     mode: str            # "rw" or "ro"
     target: str | None = None  # target path in container (None = same as path)
     optional: bool = False     # if True, skip when source doesn't exist
+    inode: str | None = None   # "dev:ino" at mount time — detects path replaced by different dir
 
     def to_dict(self) -> dict:
         d: dict = {"path": self.path, "mode": self.mode}
@@ -24,12 +25,14 @@ class MountEntry:
             d["target"] = self.target
         if self.optional:
             d["optional"] = True
+        if self.inode is not None:
+            d["inode"] = self.inode
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> MountEntry:
         return cls(path=d["path"], mode=d["mode"], target=d.get("target"),
-                   optional=d.get("optional", False))
+                   optional=d.get("optional", False), inode=d.get("inode"))
 
 
 @dataclass
