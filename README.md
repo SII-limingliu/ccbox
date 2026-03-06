@@ -2,16 +2,31 @@
 
 Sandboxed Claude Code and Codex CLI sessions in LXD containers. Run `claude --dangerously-skip-permissions` or `codex --yolo` safely by isolating them inside a container with identity-mapped mounts.
 
-## Why ccbox
+## Why ccbox?
 
-The sandbox that doesn't make you start over every time.
+Most AI sandboxes treat your environment like a disposable wrapper: they mess up your file permissions, erase your installed tools when they restart, and drop your Claude session if you close your laptop.
 
-- **Shared session state** — Host and container share the same `~/.claude` and `~/.local/share/claude` via rw bind mounts. Start a Claude session on the host, resume it inside the sandbox (and vice versa) with no export/import step.
-- **Persistent full environment** — LXD images backed by ZFS. Install Rust, Go, build tools once, publish the image, reuse across all sandboxes. No re-setup per session.
-- **Flexible mounts** — Add any host directory as a read-only or read-write mount. Multiple projects can share a single sandbox, and you can mount reference repos, datasets, or config dirs alongside your working tree.
-- **uv hardlink deferral** — A patched uv binary delegates cross-mount hardlinks to a host-side Unix socket server, preserving the shared cache performance that other sandboxing tools lose (most fall back to `UV_LINK_MODE=copy`).
-- **Identity-mapped mounts** — LXD `raw.idmap` maps host UID to container UID 1:1. No UID translation, no `chown` storms, no broken file permissions. Hardlinks, venvs, and git repos just work.
-- **Container creation is slow** — Admittedly, spinning up a new LXD container takes a few seconds. Subsequent sessions reuse the existing container and attach instantly.
+**`ccbox` is built differently.** We use LXD system containers to give Claude a sandbox that actually feels like a permanent, well-equipped remote workspace.
+
+Here is what that solves:
+
+- **🚫 No more `sudo chown` permission hell:**
+  *The Pain:* Docker sandboxes run as root or random UIDs, leaving your generated files with locked permissions so you can't edit or commit them on your host.
+  *The Fix:* `ccbox` maps your host User ID to the container 1:1. Files created by Claude are owned by *you*. Git, your IDE, and your host tools just work seamlessly.
+
+- **🧠 You never lose context when you close the terminal:**
+  *The Pain:* Close a Docker shell, and your Claude session is gone.
+  *The Fix:* `ccbox` wraps every session in `tmux` automatically. Close your laptop, hit `Ctrl+Q` to detach, and come back later—run `ccbox` again and you're instantly reattached to Claude, mid-thought. Plus, it shares the `~/.claude` state dynamically with your host system.
+
+- **⚡ Blazing fast Python dependency caching (across mounts):**
+  *The Pain:* Insanely fast package managers like `uv` rely on filesystem hardlinks. In normal containers, your caching breaks across volume boundaries, grinding package installs to a halt.
+  *The Fix:* We ship a securely patched `uv` binary. It delegates hardlink creation to a host-side Unix socket, allowing lightning-fast, zero-copy package caching across the container boundary.
+
+- **🛠️ A sandbox that feels like a real machine:**
+  *The Pain:* Single-process Docker containers lack full init systems. Try asking Claude to start a background database service or run complex build tools, and it fails.
+  *The Fix:* LXD provides a *full system container*. It acts perfectly like a persistent Ubuntu/Linux machine. Install Rust, build tools, or spin up systemd services. Thanks to ZFS backing, the whole OS state persists between sessions without having to "rebuild the image" every time.
+
+- *(Admittedly, spinning up a brand new environment takes a few seconds. But subsequent sessions reuse the existing container and attach instantly).*
 
 ## How it works
 
