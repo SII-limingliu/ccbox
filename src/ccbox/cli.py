@@ -42,6 +42,8 @@ from ccbox import lxd
 
 def check_lxd_group() -> None:
     """Check if the current user is in the lxd group."""
+    if os.getuid() == 0:
+        return  # root doesn't need lxd group
     import grp
     try:
         lxd_group = grp.getgrnam("lxd")

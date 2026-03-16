@@ -36,7 +36,8 @@ def container_state(name: str) -> str:
         return "NotFound"
     for line in r.stdout.splitlines():
         if line.startswith("Status:"):
-            return line.split(":", 1)[1].strip()
+            raw = line.split(":", 1)[1].strip()
+            return raw.capitalize()
     return "NotFound"
 
 

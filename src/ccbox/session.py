@@ -12,16 +12,10 @@ TMUX_CONF = "/etc/tmux.conf"
 
 
 def list_sessions(container: str) -> list[dict]:
-    """List tmux sessions inside the container.
-
-    Returns list of dicts with keys: name, attached, created.
-    """
     r = lxd.exec_cmd(
         container,
         ["tmux", "list-sessions", "-F", "#{session_name}|#{session_attached}|#{session_created}"],
-        user=CONTAINER_USER,
-        capture=True,
-        check=False,
+        user=CONTAINER_USER, capture=True, check=False,
     )
     if r.returncode != 0:
         return []
@@ -38,12 +32,10 @@ def list_sessions(container: str) -> list[dict]:
 
 
 def detached_sessions(container: str) -> list[dict]:
-    """Return only detached (unattached) sessions."""
     return [s for s in list_sessions(container) if not s["attached"]]
 
 
 def next_session_name(container: str) -> str:
-    """Generate the next sequential session name (s-0, s-1, ...)."""
     existing = list_sessions(container)
     used = set()
     for s in existing:
@@ -59,6 +51,43 @@ def next_session_name(container: str) -> str:
     return f"s-{n}"
 
 
+def _ensure_onboarding_complete(container: str, home: str) -> None:
+    """Patch $CLAUDE_CONFIG_DIR/.claude.json so Claude skips onboarding.
+
+    Claude may overwrite this file during a session, dropping the
+    hasCompletedOnboarding flag. We re-inject it before every new session.
+    """
+    import json
+    config_json = f"{home}/.claude/.claude.json"
+    r = lxd.exec_cmd(
+        container, ["cat", config_json],
+        user=CONTAINER_USER, capture=True, check=False,
+    )
+    if r.returncode != 0:
+        return
+    try:
+        data = json.loads(r.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return
+    if data.get("hasCompletedOnboarding") is True:
+        return
+    rv = lxd.exec_cmd(
+        container, [f"{home}/.local/bin/claude", "--version"],
+        user=CONTAINER_USER, capture=True, check=False,
+    )
+    version = rv.stdout.strip().split()[0] if rv.returncode == 0 else "0"
+    data["hasCompletedOnboarding"] = True
+    data["lastOnboardingVersion"] = version
+    data.setdefault("numStartups", 100)
+    data.setdefault("hasSeenTasksHint", True)
+    payload = json.dumps(data)
+    lxd.exec_cmd(
+        container,
+        ["bash", "-c", f"cat > {config_json} << 'CCBOX_EOF'\n{payload}\nCCBOX_EOF"],
+        user=CONTAINER_USER, check=False,
+    )
+
+
 def create_session(
     container: str,
     command: str,
@@ -67,52 +96,38 @@ def create_session(
     env: dict[str, str] | None = None,
     session_name: str | None = None,
 ) -> str:
-    """Create a new tmux session inside the container.
-
-    Uses tmux new-session -d, then send-keys with exec so the command
-    replaces bash — exiting the command kills the tmux session.
-    """
     if session_name is None:
         session_name = next_session_name(container)
-
     if env is None:
         env = {}
 
-    # Ensure HOME is set — lxc exec with --env flags may not inherit it
     from pathlib import Path
     env.setdefault("HOME", str(Path.home()))
 
-    # Login identity vars — tools like git and claude expect these
     import getpass
     env.setdefault("USER", getpass.getuser())
     env.setdefault("LOGNAME", env["USER"])
-
-    # Keep Claude's mutable config under ~/.claude (rw mount), not ~/.claude.json.
     env.setdefault("CLAUDE_CONFIG_DIR", f"{env['HOME']}/.claude")
 
-    # Always set UV_HARDLINK_SOCKET so patched uv defers hardlinks to host
     from ccbox.config import UV_SOCK
     env.setdefault("UV_HARDLINK_SOCKET", str(UV_SOCK))
 
-    # Build tmux new-session command
+    _ensure_onboarding_complete(container, env.get("HOME", str(Path.home())))
+
     tmux_args = ["tmux", "-f", TMUX_CONF, "new-session", "-d", "-s", session_name]
     if cwd:
         tmux_args += ["-c", cwd]
 
     lxd.exec_cmd(container, tmux_args, user=CONTAINER_USER, env=env)
-
-    # exec replaces bash with the command — when it exits, the tmux session ends.
     lxd.exec_cmd(
         container,
         ["tmux", "send-keys", "-t", session_name, f"exec {command}", "Enter"],
         user=CONTAINER_USER,
     )
-
     return session_name
 
 
 def attach_session(container: str, session_name: str) -> None:
-    """Attach to an existing tmux session (interactive, inherited stdio)."""
     lxd.exec_interactive(
         container,
         ["tmux", "-f", TMUX_CONF, "attach-session", "-t", session_name],
@@ -122,57 +137,39 @@ def attach_session(container: str, session_name: str) -> None:
 
 
 def kill_session(container: str, name: str) -> None:
-    lxd.exec_cmd(
-        container,
-        ["tmux", "kill-session", "-t", name],
-        user=CONTAINER_USER,
-        check=False,
-    )
+    lxd.exec_cmd(container, ["tmux", "kill-session", "-t", name],
+                 user=CONTAINER_USER, check=False)
 
 
 def kill_all_sessions(container: str) -> None:
-    lxd.exec_cmd(
-        container,
-        ["tmux", "kill-server"],
-        user=CONTAINER_USER,
-        check=False,
-    )
+    lxd.exec_cmd(container, ["tmux", "kill-server"],
+                 user=CONTAINER_USER, check=False)
 
 
 def build_claude_command(extra_args: list[str] | None = None) -> str:
-    """Build the claude invocation command string."""
-    parts = ["claude", "--allow-dangerously-skip-permissions"]
+    parts = ["claude", "--dangerously-skip-permissions"]
     if extra_args:
-        # Deduplicate the flag if user passed it
         for arg in extra_args:
-            if arg == "--allow-dangerously-skip-permissions":
+            if arg in ("--allow-dangerously-skip-permissions",
+                       "--dangerously-skip-permissions"):
                 continue
             parts.append(arg)
     return shlex.join(parts)
 
 
 def _find_codex() -> str | None:
-    """Find the codex binary — check nvm, then PATH."""
     import glob
     import shutil
-    # Prefer nvm-installed codex (we know the node version to pair with)
     matches = glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/codex"))
     if matches:
         return matches[0]
-    # Fall back to whatever's on PATH
     return shutil.which("codex")
 
 
 def build_codex_command(extra_args: list[str] | None = None) -> str:
-    """Build the codex invocation command string with --yolo.
-
-    Uses the full path to the nvm-installed codex and prepends its
-    bin dir to PATH so the matching node version is found.
-    """
     codex_path = _find_codex()
     if codex_path:
         codex_dir = os.path.dirname(codex_path)
-        # Only prepend to PATH if it's an nvm path (needs paired node)
         nvm_bin = codex_dir if "/.nvm/" in codex_path else None
         parts = [codex_path, "--yolo"]
     else:
@@ -185,14 +182,11 @@ def build_codex_command(extra_args: list[str] | None = None) -> str:
             parts.append(arg)
     cmd = shlex.join(parts)
     if nvm_bin:
-        # Use env(1) to prepend nvm bin to PATH — inline VAR=val
-        # doesn't work with bash's exec builtin.
         cmd = f"env PATH={shlex.quote(nvm_bin)}:$PATH {cmd}"
     return cmd
 
 
 def get_forwarded_env(whitelist: list[str]) -> dict[str, str]:
-    """Read host env vars that should be forwarded into the container."""
     result = {}
     for var in whitelist:
         val = os.environ.get(var)
