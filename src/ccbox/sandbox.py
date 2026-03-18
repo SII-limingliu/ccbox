@@ -204,6 +204,10 @@ def ensure_running(config: Config, name: str) -> str:
         if IS_ROOT:
             _fix_privileged_networking(entry.container)
         _push_claude_settings(entry.container)
+    elif state == "Running" and IS_ROOT:
+        # Always verify networking — Docker may reset iptables at any time,
+        # and privileged containers lose DNS/IP on network disruption.
+        _fix_privileged_networking(entry.container)
     return entry.container
 
 
